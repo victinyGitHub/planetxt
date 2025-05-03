@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity() {
         NearbyManager.init(this)
         setContent {
             PlanetxtTheme {
-                ChatScreen()
+                AppScreen()
             }
         }
     }
@@ -71,67 +71,90 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable
-fun ChatScreen() {
-    val context = LocalContext.current
-    var userName by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("") }
-    val messages = remember { mutableStateListOf<Pair<String, Boolean>>() }
-    var connectionCount by remember { mutableStateOf(0) }
+// Simple navigation enum
+enum class Screen { SELECT_ROLE, ADMIN, USER }
 
-    LaunchedEffect(Unit) {
-        NearbyManager.onMessageReceived = { msg ->
-            messages.add(msg to true)
+@Composable
+fun AppScreen() {
+    var screen by remember { mutableStateOf(Screen.SELECT_ROLE) }
+    when (screen) {
+        Screen.SELECT_ROLE -> RoleSelectionScreen { screen = it }
+        Screen.ADMIN -> AdminScreen()
+        Screen.USER -> UserScreen()
+    }
+}
+
+@Composable
+fun RoleSelectionScreen(onRoleChosen: (Screen) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Button(onClick = { onRoleChosen(Screen.ADMIN) }) {
+            Text("Admin Panel")
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = { onRoleChosen(Screen.USER) }) {
+            Text("User Screen")
         }
     }
+}
 
-    // Observe connection change
+@Composable
+fun AdminScreen() {
+    val context = LocalContext.current
+    var message by remember { mutableStateOf("") }
+    var connectionCount by remember { mutableStateOf(0) }
+
+    // Start advertising once
     LaunchedEffect(Unit) {
+        NearbyManager.startAdvertising(context, "Admin") { _, _ -> }
         NearbyManager.onConnectionChanged = { connectionCount = it }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(text = "Connected peers: $connectionCount")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = userName,
-                onValueChange = { userName = it },
-                label = { Text("Your name") },
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = {
-                if (userName.isNotBlank()) {
-                    NearbyManager.startAdvertising(context, userName)
-                }
-            }) { Text("Advertise") }
-            Spacer(modifier = Modifier.width(4.dp))
-            Button(onClick = { NearbyManager.startDiscovery { /* connected */ } }) { Text("Discover") }
-        }
-
+        Text(text = "Admin Mode – Connected peers: $connectionCount")
         Spacer(modifier = Modifier.height(16.dp))
-
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(messages) { (txt, incoming) ->
-                Text(text = if (incoming) "Them: $txt" else "Me: $txt")
+        TextField(
+            value = message,
+            onValueChange = { message = it },
+            label = { Text("Broadcast message") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(onClick = {
+            if (message.isNotBlank()) {
+                NearbyManager.broadcast(message)
+                message = ""
             }
+        }, modifier = Modifier.align(Alignment.End)) {
+            Text("Send to All")
         }
+    }
+}
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = message,
-                onValueChange = { message = it },
-                label = { Text("Message") },
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = {
-                if (message.isNotBlank()) {
-                    NearbyManager.broadcast(message)
-                    messages.add(message to false)
-                    message = ""
-                }
-            }) { Text("Send") }
+@Composable
+fun UserScreen() {
+    val context = LocalContext.current
+    val messages = remember { mutableStateListOf<String>() }
+    var connectionCount by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        NearbyManager.onMessageReceived = { msg ->
+            messages.add(msg)
+        }
+        NearbyManager.onConnectionChanged = { connectionCount = it }
+        NearbyManager.startDiscovery {}
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(text = "User Mode – Connected to $connectionCount peer(s)")
+        Spacer(modifier = Modifier.height(16.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(messages) { txt ->
+                Text(text = txt)
+            }
         }
     }
 }
