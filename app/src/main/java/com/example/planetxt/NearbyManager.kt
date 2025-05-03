@@ -109,7 +109,13 @@ object NearbyManager {
             Log.d(TAG, "Discovery successfully started")
             isDiscovering = true
         }
-            .addOnFailureListener { e -> Log.e(TAG, "Discovery failed", e) }
+            .addOnFailureListener { e ->
+                if (e is com.google.android.gms.common.api.ApiException && e.statusCode == 8002) {
+                    Log.d(TAG, "Already discovering, ignore")
+                } else {
+                    Log.e(TAG, "Discovery failed", e)
+                }
+            }
     }
 
     /** Broadcasts a string message to all currently connected endpoints. */
@@ -178,6 +184,7 @@ object NearbyManager {
             // If no peers left, resume discovery automatically for seamless reconnection
             if (connectedEndpoints.isEmpty()) {
                 isDiscovering = false
+                Log.d(TAG, "All peers gone, restarting discovery")
                 startDiscovery()
             }
         }

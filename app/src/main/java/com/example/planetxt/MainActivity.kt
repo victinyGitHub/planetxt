@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,9 +18,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import android.util.Log
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.example.planetxt.CryptoUtil
 import com.example.planetxt.ui.theme.PlanetxtTheme
+
+private const val ADMIN_TAG = "AdminScreen"
 
 class MainActivity : ComponentActivity() {
 
@@ -67,8 +73,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onStop() {
-        super.onStop()
+    override fun onDestroy() {
+        super.onDestroy()
         NearbyManager.stopAll()
     }
 }
@@ -110,6 +116,35 @@ fun AdminScreen() {
     var lastName by remember { mutableStateOf("") }
     var bookingRef by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
+    var csvStatus by remember { mutableStateOf("") }
+
+    val scope = rememberCoroutineScope()
+    val csvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            scope.launch {
+                try {
+                    val lines = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readLines() ?: return@launch
+                    var sent = 0
+                    lines.forEach { line ->
+                        val parts = line.split(',')
+                        if (parts.size >= 3) {
+                            val ln = parts[0].trim()
+                            val ref = parts[1].trim()
+                            val data = parts.drop(2).joinToString(",").trim()
+                            Log.d(ADMIN_TAG, "Broadcast CSV line for $ln/$ref : $data")
+                            NearbyManager.broadcast(data, true, ln, ref)
+                            sent++
+                        }
+                    }
+                    csvStatus = "Broadcasted $sent boarding passes from CSV"
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    )
 
     LaunchedEffect(Unit) {
         NearbyManager.onConnectionChanged = { connectionCount = it }
@@ -152,8 +187,20 @@ fun AdminScreen() {
                 message = ""
             }
         }, modifier = Modifier.align(Alignment.End)) {
-            Text("Send to All")
+            Text("Send Manual Message")
         }
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = {
+            // launch file picker for CSV
+            csvLauncher.launch(arrayOf("text/*"))
+        }) {
+            Text("Import CSV & Broadcast Now")
+        }
+        if (csvStatus.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(csvStatus, style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
