@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -225,15 +226,16 @@ fun UserScreen() {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<String>() }
     val announcements = remember { mutableStateListOf<String>() }
-    var lastName by remember { mutableStateOf("") }
-    var bookingRef by remember { mutableStateOf("") }
+    var lastName by rememberSaveable { mutableStateOf("") }
+    var bookingRef by rememberSaveable { mutableStateOf("") }
+    var loggedIn by rememberSaveable { mutableStateOf(false) }
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         NearbyManager.onMessageReceived = { msg ->
             if (msg.startsWith("ANN:")) {
                 announcements.add(msg.removePrefix("ANN:"))
-            } else {
+            } else if (loggedIn) {
                 val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
                     CryptoUtil.decryptMessage(msg, lastName, bookingRef) else null
                 if (plain != null) messages.add(plain)
@@ -249,33 +251,51 @@ fun UserScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(text = "User Mode – Connected to $connectionCount peer(s)")
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = lastName,
-            onValueChange = { lastName = it },
-            label = { Text("Last name") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = bookingRef,
-            onValueChange = { bookingRef = it },
-            label = { Text("Booking ref") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(16.dp))
+        if (!loggedIn) {
+            OutlinedTextField(
+                value = lastName,
+                onValueChange = { lastName = it },
+                label = { Text("Last name") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = bookingRef,
+                onValueChange = { bookingRef = it },
+                label = { Text("Booking ref") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = {
+                if (lastName.isNotBlank() && bookingRef.isNotBlank()) {
+                    loggedIn = true
+                }
+            }, modifier = Modifier.align(Alignment.End)) {
+                Text("Log In")
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Logged in as $lastName / $bookingRef", modifier = Modifier.weight(1f))
+                Button(onClick = {
+                    loggedIn = false
+                    messages.clear()
+                    announcements.clear()
+                    lastName = ""
+                    bookingRef = ""
+                }) { Text("Log Out") }
+            }
 
-        Text("Announcements:")
-        LazyColumn(modifier = Modifier.height(120.dp)) {
-            items(announcements) { txt -> Text(txt) }
-        }
+            Spacer(Modifier.height(16.dp))
 
-        Spacer(Modifier.height(16.dp))
-        Text("Your messages:")
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(messages) { txt ->
-                Text(text = txt)
+            Text("Announcements:")
+            LazyColumn(modifier = Modifier.height(120.dp)) {
+                items(announcements) { txt -> Text(txt) }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text("Your messages:")
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(messages) { txt -> Text(text = txt) }
             }
         }
     }
