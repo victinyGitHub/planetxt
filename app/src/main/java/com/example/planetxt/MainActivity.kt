@@ -31,7 +31,6 @@ import com.example.planetxt.ui.theme.PlanetxtTheme
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import com.google.zxing.common.BitMatrix
-import androidx.compose.foundation.Image
 
 private const val ADMIN_TAG = "AdminScreen"
 
