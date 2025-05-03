@@ -22,6 +22,9 @@ import androidx.core.content.ContextCompat
 import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.URL
 import com.example.planetxt.CryptoUtil
 import com.example.planetxt.ui.theme.PlanetxtTheme
 
@@ -121,35 +124,13 @@ fun AdminScreen() {
     var announcement by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
-    val csvLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri ->
-            if (uri == null) return@rememberLauncherForActivityResult
-            scope.launch {
-                try {
-                    val lines = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readLines() ?: return@launch
-                    var sent = 0
-                    lines.forEach { line ->
-                        val parts = line.split(',')
-                        if (parts.size >= 3) {
-                            val ln = parts[0].trim()
-                            val ref = parts[1].trim()
-                            val data = parts.drop(2).joinToString(",").trim()
-                            Log.d(ADMIN_TAG, "Broadcast CSV line for $ln/$ref : $data")
-                            val encryptedMessage = CryptoUtil.encryptMessage(data, ln, ref)
-                            if (encryptedMessage != null) {
-                                NearbyManager.broadcast(encryptedMessage)
-                                sent++
-                            }
-                        }
-                    }
-                    csvStatus = "Broadcasted $sent boarding passes from CSV"
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    )
+    // Regex to split on commas that are not inside double quotes (handles quoted fields)
+    val splitterRegex = Regex(""",(?=(?:[^"]*"[^"]*")*[^"]*$)""")
+
+    fun parseCsvLine(line: String): List<String> {
+        // Split on commas that are not inside quotes
+        return splitterRegex.split(line).map { it.trim('"', ' ') }
+    }
 
     LaunchedEffect(Unit) {
         NearbyManager.onConnectionChanged = { connectionCount = it }
@@ -200,10 +181,37 @@ fun AdminScreen() {
         }
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = {
-            // launch file picker for CSV
-            csvLauncher.launch(arrayOf("text/*"))
+            scope.launch {
+                csvStatus = "Fetching passenger CSV..."
+                Log.i(ADMIN_TAG, "Starting CSV fetch...")
+                try {
+                    val csvText = withContext(Dispatchers.IO) {
+                        URL("https://planetext.us/api/passengers/export").readText()
+                    }
+                    Log.i(ADMIN_TAG, "CSV fetched, size=${'$'}{csvText.length}")
+                    val lines = csvText.lines().filter { it.isNotBlank() }
+                    var sent = 0
+                    lines.drop(1).forEachIndexed { index, line ->
+                        if (line.isBlank()) return@forEachIndexed
+                        val parts = parseCsvLine(line)
+                        if (parts.size >= 14) {
+                            val ln = parts[1]
+                            val ref = parts[5]
+                            val encryptedMessage = CryptoUtil.encryptMessage(line, ln, ref)
+                            NearbyManager.broadcast(encryptedMessage)
+                            sent++
+                        } else {
+                            Log.w(ADMIN_TAG, "CSV line $index malformed, parts=${'$'}{parts.size}: $line")
+                        }
+                    }
+                    csvStatus = "Broadcasted $sent passengers from CSV"
+                } catch (e: Exception) {
+                    csvStatus = "Failed to broadcast CSV: ${'$'}{e.localizedMessage}"
+                    Log.e(ADMIN_TAG, "Full error:", e)
+                }
+            }
         }) {
-            Text("Import CSV & Broadcast Now")
+            Text("Fetch CSV & Broadcast Now")
         }
         if (csvStatus.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
