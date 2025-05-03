@@ -122,6 +122,8 @@ fun AdminScreen() {
     var connectionCount by remember { mutableStateOf(0) }
     var csvStatus by remember { mutableStateOf("") }
     var announcement by remember { mutableStateOf("") }
+    val fetchedAnnouncements = remember { mutableStateListOf<String>() }
+    var lastConnectionCount by remember { mutableStateOf(0) }
 
     val scope = rememberCoroutineScope()
     // Regex to split on commas that are not inside double quotes (handles quoted fields)
@@ -132,13 +134,49 @@ fun AdminScreen() {
         return splitterRegex.split(line).map { it.trim('"', ' ') }
     }
 
+    fun broadcastAnnouncement(text: String, index: Int) {
+        val payload = "ANN|$index|$text"
+        NearbyManager.broadcast(payload, true)
+    }
+
     LaunchedEffect(Unit) {
-        NearbyManager.onConnectionChanged = { connectionCount = it }
+        NearbyManager.onConnectionChanged = { cnt ->
+            connectionCount = cnt
+            if (cnt > lastConnectionCount) {
+                // New peer(s) connected – replay cached announcements
+                fetchedAnnouncements.forEachIndexed { i, msg ->
+                    broadcastAnnouncement(msg, i)
+                }
+            }
+            lastConnectionCount = cnt
+        }
 
         // Keep advertising forever, retry every 60s in case the system stops it
         while (true) {
             NearbyManager.startAdvertising(context, "Admin") { _, _ -> }
             delay(60_000)
+        }
+    }
+
+    LaunchedEffect("announcement_poll") {
+        val seenAnnouncements = mutableSetOf<String>()
+        while (true) {
+            try {
+                val csv = withContext(Dispatchers.IO) {
+                    URL("https://www.planetext.us/api/announcements/export").readText()
+                }
+                val lines = csv.lines().filter { it.isNotBlank() }
+                lines.drop(1).forEach { line ->
+                    if (seenAnnouncements.add(line)) {
+                        fetchedAnnouncements.add(line)
+                        broadcastAnnouncement(line, fetchedAnnouncements.lastIndex)
+                        Log.i(ADMIN_TAG, "Broadcasted new announcement from server: $line")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(ADMIN_TAG, "Announcement polling failed", e)
+            }
+            delay(30_000)
         }
     }
 
@@ -218,6 +256,11 @@ fun AdminScreen() {
             Text(csvStatus, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(modifier = Modifier.height(16.dp))
+        Text("Server Announcements:")
+        LazyColumn(modifier = Modifier.height(120.dp)) {
+            items(fetchedAnnouncements) { txt -> Text(txt) }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = announcement,
             onValueChange = { announcement = it },
@@ -227,7 +270,8 @@ fun AdminScreen() {
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
             if (announcement.isNotBlank()) {
-                NearbyManager.broadcast(announcement, true)
+                fetchedAnnouncements.add(announcement)
+                broadcastAnnouncement(announcement, fetchedAnnouncements.lastIndex)
                 announcement = ""
             }
         }, modifier = Modifier.align(Alignment.End)) {
@@ -241,16 +285,34 @@ fun UserScreen() {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<String>() }
     val announcements = remember { mutableStateListOf<String>() }
+    val receivedAnnIds = remember { mutableSetOf<Int>() }
     var lastName by rememberSaveable { mutableStateOf("") }
     var bookingRef by rememberSaveable { mutableStateOf("") }
     var loggedIn by rememberSaveable { mutableStateOf(false) }
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
-        NearbyManager.onMessageReceived = { content, metadata ->
+        NearbyManager.onMessageReceived = listener@ { content, metadata ->
+            // Handle versioned announcement payloads first
+            if (content.startsWith("ANN|")) {
+                val secondSep = content.indexOf('|', 4)
+                if (secondSep > 4) {
+                    val idPart = content.substring(4, secondSep)
+                    val id = idPart.toIntOrNull()
+                    val body = content.substring(secondSep + 1)
+                    if (id != null && receivedAnnIds.add(id)) {
+                        announcements.add(body)
+                    }
+                }
+                return@listener
+            }
+
             if (metadata.isAnnouncement) {
                 announcements.add(content)
-            } else if (loggedIn) {
+                return@listener
+            }
+
+            if (loggedIn) {
                 val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
                     CryptoUtil.decryptMessage(content, lastName, bookingRef) else null
                 if (plain != null) messages.add(plain)
