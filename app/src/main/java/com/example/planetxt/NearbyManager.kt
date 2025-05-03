@@ -4,56 +4,94 @@ import android.content.Context
 import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
+import com.google.gson.Gson
+import java.util.UUID
 
 /**
- * Helper object that wraps Google Nearby Connections API to provide simple
- * broadcast (advertising) + receive (discovery) capabilities for small
- * payloads.
- *
- * Call [init] once from your Application or first Activity and then use
- * [startAdvertising] / [startDiscovery] to establish connections.  Messages can
- * be broadcast to all currently connected peers via [broadcast].  Register for
- * incoming messages by assigning a lambda to [onMessageReceived].
+ * Helper object that wraps Google Nearby Connections API to provide mesh networking
+ * capabilities for small payloads with hop counting and deduplication.
  */
 object NearbyManager {
-
     private const val SERVICE_ID = "com.example.planetxt.NEARBY_SERVICE"
     private const val TAG = "NearbyManager"
+    private const val MAX_HOPS = 5  // Maximum number of hops before a packet dies
 
     private lateinit var connectionsClient: ConnectionsClient
     private val connectedEndpoints = mutableSetOf<String>()
+    private val seenPacketIds = mutableSetOf<String>()  // Track seen packets by ID
     private var isDiscovering = false
     private var isAdvertising = false
+    private val gson = Gson()
 
-    /** Emits the number of connected endpoints whenever it changes.  Set from UI layer. */
+    /** Emits the number of connected endpoints whenever it changes. */
     var onConnectionChanged: ((Int) -> Unit)? = null
 
-    /** Initialises the underlying [ConnectionsClient]. Must be called before any other method. */
+    /** Listener for incoming messages with metadata. */
+    var onMessageReceived: ((String, PacketMetadata) -> Unit)? = null
+
+    // Data classes for packet structure
+    data class Packet(
+        val metadata: PacketMetadata,
+        val content: String
+    )
+
+    data class PacketMetadata(
+        val id: String = UUID.randomUUID().toString(),
+        val isAnnouncement: Boolean = false,
+        var hopCount: Int = 0,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
+    /** Initializes the underlying [ConnectionsClient]. Must be called before any other method. */
     fun init(context: Context) {
         connectionsClient = Nearby.getConnectionsClient(context.applicationContext)
+        Log.i(TAG, "Initialized NearbyManager")
     }
 
     /**
-     * Starts advertising so that other devices can discover this one.
-     * @param context Android context
-     * @param userName Name that is shown to remote devices
-     * @param onAdvertisingResult Callback that returns success + optional msg
+     * Broadcasts a message to all connected peers with proper metadata.
+     * @param content The message content
+     * @param isAnnouncement Whether this is an announcement (to be rebroadcast)
      */
-    @JvmStatic
+    fun broadcast(content: String, isAnnouncement: Boolean = false) {
+        if (connectedEndpoints.isEmpty()) {
+            Log.d(TAG, "No endpoints connected, cannot broadcast")
+            return
+        }
+
+        val packet = Packet(
+            metadata = PacketMetadata(isAnnouncement = isAnnouncement),
+            content = content
+        )
+        
+        Log.i(TAG, "Broadcasting new packet: id=${packet.metadata.id}, announcement=$isAnnouncement")
+        broadcastPacket(packet)
+    }
+
+    private fun broadcastPacket(packet: Packet) {
+        val json = gson.toJson(packet)
+        val payload = Payload.fromBytes(json.toByteArray())
+        
+        for (endpoint in connectedEndpoints) {
+            connectionsClient.sendPayload(endpoint, payload)
+            Log.d(TAG, "Sent to endpoint $endpoint: packet=${packet.metadata.id}, hops=${packet.metadata.hopCount}")
+        }
+    }
+
+    /** Starts advertising so other devices can discover this one. */
     fun startAdvertising(
         context: Context,
         userName: String,
         onAdvertisingResult: (Boolean, String?) -> Unit = { _, _ -> }
     ) {
-        Log.d(TAG, "startAdvertising name=$userName")
-        val advertisingOptions = AdvertisingOptions.Builder()
-            .setStrategy(Strategy.P2P_CLUSTER)
-            .build()
-
         if (isAdvertising) {
             Log.d(TAG, "Already advertising")
             return
         }
+
+        val advertisingOptions = AdvertisingOptions.Builder()
+            .setStrategy(Strategy.P2P_CLUSTER)
+            .build()
 
         getClient(context).startAdvertising(
             userName,
@@ -61,26 +99,20 @@ object NearbyManager {
             connectionLifecycleCallback(onAdvertisingResult),
             advertisingOptions
         ).addOnSuccessListener {
-            Log.d(TAG, "Advertising successfully started")
+            Log.i(TAG, "Advertising started: userName=$userName")
             isAdvertising = true
         }.addOnFailureListener { e ->
             Log.e(TAG, "Advertising failed", e)
         }
     }
 
-    /**
-     * Starts discovery so that this device looks for advertisers and attempts
-     * to connect to them automatically.
-     * @param onEndpointConnected Callback with the endpoint id when connected.
-     */
-    @JvmStatic
+    /** Starts discovery to find other devices. */
     fun startDiscovery(onEndpointConnected: (String) -> Unit = {}) {
         if (isDiscovering) {
             Log.d(TAG, "Already discovering")
             return
         }
 
-        Log.d(TAG, "startDiscovery")
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
@@ -89,10 +121,9 @@ object NearbyManager {
             SERVICE_ID,
             object : EndpointDiscoveryCallback() {
                 override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-                    Log.d(TAG, "Endpoint found $endpointId -> requesting connection")
-                    // Attempt to connect automatically
+                    Log.i(TAG, "Endpoint found: id=$endpointId, name=${info.endpointName}")
                     connectionsClient.requestConnection(
-                        /* name= */ "receiver",
+                        "receiver",
                         endpointId,
                         connectionLifecycleCallback { success, _ ->
                             if (success) onEndpointConnected(endpointId)
@@ -101,62 +132,29 @@ object NearbyManager {
                 }
 
                 override fun onEndpointLost(endpointId: String) {
-                    Log.d(TAG, "Endpoint lost $endpointId")
+                    Log.d(TAG, "Endpoint lost: $endpointId")
                 }
             },
             discoveryOptions
         ).addOnSuccessListener {
-            Log.d(TAG, "Discovery successfully started")
+            Log.i(TAG, "Discovery started")
             isDiscovering = true
-        }
-            .addOnFailureListener { e ->
-                if (e is com.google.android.gms.common.api.ApiException && e.statusCode == 8002) {
-                    Log.d(TAG, "Already discovering, ignore")
-                } else {
-                    Log.e(TAG, "Discovery failed", e)
-                }
-            }
-    }
-
-    /** Broadcasts a string message to all currently connected endpoints. */
-    @JvmStatic
-    fun broadcast(
-        msg: String,
-        encrypt: Boolean = false,
-        lastName: String = "",
-        ref: String = "",
-        announcement: Boolean = false
-    ) {
-        if (connectedEndpoints.isEmpty()) return
-        val finalMsg = when {
-            announcement -> "ANN:" + msg
-            encrypt && lastName.isNotBlank() && ref.isNotBlank() -> CryptoUtil.encryptMessage(msg, lastName, ref)
-            else -> msg
-        }
-        val payload = Payload.fromBytes(finalMsg.toByteArray())
-        for (ep in connectedEndpoints) {
-            connectionsClient.sendPayload(ep, payload)
+        }.addOnFailureListener { e ->
+            Log.e(TAG, "Discovery failed", e)
         }
     }
 
     /** Stop all ongoing Nearby activities and disconnect from peers. */
-    @JvmStatic
     fun stopAll() {
-        Log.d(TAG, "stopAll()")
+        Log.i(TAG, "Stopping all Nearby activities")
         connectionsClient.stopAllEndpoints()
         connectionsClient.stopAdvertising()
         connectionsClient.stopDiscovery()
         isAdvertising = false
         isDiscovering = false
         connectedEndpoints.clear()
+        seenPacketIds.clear()
     }
-
-    /** Listener for incoming messages (as UTF-8 String). */
-    var onMessageReceived: ((String) -> Unit)? = null
-
-    // -----------------------------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------------------------
 
     private fun getClient(context: Context): ConnectionsClient {
         if (!::connectionsClient.isInitialized) {
@@ -169,28 +167,27 @@ object NearbyManager {
         resultCallback: (Boolean, String?) -> Unit
     ): ConnectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
-            // Immediately accept the connection and register our payload callback
+            Log.i(TAG, "Connection initiated: endpoint=$endpointId, name=${connectionInfo.endpointName}")
             connectionsClient.acceptConnection(endpointId, payloadCallback)
-        } 
+        }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {
                 connectedEndpoints.add(endpointId)
-                Log.d(TAG, "onConnectionResult SUCCESS -> $endpointId (total ${'$'}{connectedEndpoints.size})")
+                Log.i(TAG, "Connection successful: endpoint=$endpointId, total=${connectedEndpoints.size}")
                 onConnectionChanged?.invoke(connectedEndpoints.size)
                 resultCallback(true, null)
             } else {
-                Log.d(TAG, "onConnectionResult FAILURE -> ${'$'}{result.status.statusMessage}")
+                Log.w(TAG, "Connection failed: endpoint=$endpointId, status=${result.status.statusMessage}")
                 resultCallback(false, result.status.statusMessage)
             }
         }
 
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
-            Log.d(TAG, "onDisconnected $endpointId (total ${'$'}{connectedEndpoints.size})")
+            Log.i(TAG, "Endpoint disconnected: $endpointId, total=${connectedEndpoints.size}")
             onConnectionChanged?.invoke(connectedEndpoints.size)
 
-            // If no peers left, resume discovery automatically for seamless reconnection
             if (connectedEndpoints.isEmpty()) {
                 isDiscovering = false
                 Log.d(TAG, "All peers gone, restarting discovery")
@@ -202,9 +199,39 @@ object NearbyManager {
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             payload.asBytes()?.let { bytes ->
-                val msg = bytes.toString(Charsets.UTF_8)
-                Log.d(TAG, "payloadReceived from $endpointId: $msg")
-                onMessageReceived?.invoke(msg)
+                try {
+                    val json = String(bytes, Charsets.UTF_8)
+                    val packet = gson.fromJson(json, Packet::class.java)
+                    
+                    Log.i(TAG, "Received packet: id=${packet.metadata.id}, from=$endpointId, hops=${packet.metadata.hopCount}")
+
+                    // Check if we've seen this packet before
+                    if (seenPacketIds.contains(packet.metadata.id)) {
+                        Log.d(TAG, "Duplicate packet ${packet.metadata.id}, ignoring")
+                        return@let
+                    }
+                    seenPacketIds.add(packet.metadata.id)
+
+                    // Notify listeners of the received message
+                    onMessageReceived?.invoke(packet.content, packet.metadata)
+
+                    // If it's an announcement and hasn't exceeded max hops, rebroadcast
+                    if (packet.metadata.isAnnouncement && packet.metadata.hopCount < MAX_HOPS) {
+                        val updatedPacket = packet.copy(
+                            metadata = packet.metadata.copy(
+                                hopCount = packet.metadata.hopCount + 1
+                            )
+                        )
+                        Log.d(TAG, "Rebroadcasting packet ${packet.metadata.id}, hops=${updatedPacket.metadata.hopCount}")
+                        broadcastPacket(updatedPacket)
+                    }
+                    
+                    if (packet.metadata.hopCount >= MAX_HOPS) {
+                        Log.d(TAG, "Packet ${packet.metadata.id} reached max hops (${packet.metadata.hopCount}), dropping")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing received payload", e)
+                }
             }
         }
 

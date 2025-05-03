@@ -136,8 +136,11 @@ fun AdminScreen() {
                             val ref = parts[1].trim()
                             val data = parts.drop(2).joinToString(",").trim()
                             Log.d(ADMIN_TAG, "Broadcast CSV line for $ln/$ref : $data")
-                            NearbyManager.broadcast(data, true, ln, ref)
-                            sent++
+                            val encryptedMessage = CryptoUtil.encryptMessage(data, ln, ref)
+                            if (encryptedMessage != null) {
+                                NearbyManager.broadcast(encryptedMessage)
+                                sent++
+                            }
                         }
                     }
                     csvStatus = "Broadcasted $sent boarding passes from CSV"
@@ -184,9 +187,13 @@ fun AdminScreen() {
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
             if (message.isNotBlank()) {
-                val encrypt = lastName.isNotBlank() && bookingRef.isNotBlank()
-                NearbyManager.broadcast(message, encrypt, lastName, bookingRef)
-                message = ""
+                val encryptedMessage = CryptoUtil.encryptMessage(message, lastName, bookingRef)
+                if (encryptedMessage != null) {
+                    NearbyManager.broadcast(encryptedMessage)
+                    message = ""
+                    lastName = ""
+                    bookingRef = ""
+                }
             }
         }, modifier = Modifier.align(Alignment.End)) {
             Text("Send Manual Message")
@@ -212,7 +219,7 @@ fun AdminScreen() {
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
             if (announcement.isNotBlank()) {
-                NearbyManager.broadcast(announcement, announcement = true)
+                NearbyManager.broadcast(announcement, true)
                 announcement = ""
             }
         }, modifier = Modifier.align(Alignment.End)) {
@@ -232,12 +239,12 @@ fun UserScreen() {
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
-        NearbyManager.onMessageReceived = { msg ->
-            if (msg.startsWith("ANN:")) {
-                announcements.add(msg.removePrefix("ANN:"))
+        NearbyManager.onMessageReceived = { content, metadata ->
+            if (metadata.isAnnouncement) {
+                announcements.add(content)
             } else if (loggedIn) {
                 val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
-                    CryptoUtil.decryptMessage(msg, lastName, bookingRef) else null
+                    CryptoUtil.decryptMessage(content, lastName, bookingRef) else null
                 if (plain != null) messages.add(plain)
             }
         }
