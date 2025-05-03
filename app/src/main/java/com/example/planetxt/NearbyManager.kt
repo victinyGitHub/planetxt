@@ -22,6 +22,8 @@ object NearbyManager {
 
     private lateinit var connectionsClient: ConnectionsClient
     private val connectedEndpoints = mutableSetOf<String>()
+    private var isDiscovering = false
+    private var isAdvertising = false
 
     /** Emits the number of connected endpoints whenever it changes.  Set from UI layer. */
     var onConnectionChanged: ((Int) -> Unit)? = null
@@ -48,6 +50,11 @@ object NearbyManager {
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
 
+        if (isAdvertising) {
+            Log.d(TAG, "Already advertising")
+            return
+        }
+
         getClient(context).startAdvertising(
             userName,
             SERVICE_ID,
@@ -55,6 +62,7 @@ object NearbyManager {
             advertisingOptions
         ).addOnSuccessListener {
             Log.d(TAG, "Advertising successfully started")
+            isAdvertising = true
         }.addOnFailureListener { e ->
             Log.e(TAG, "Advertising failed", e)
         }
@@ -67,6 +75,11 @@ object NearbyManager {
      */
     @JvmStatic
     fun startDiscovery(onEndpointConnected: (String) -> Unit = {}) {
+        if (isDiscovering) {
+            Log.d(TAG, "Already discovering")
+            return
+        }
+
         Log.d(TAG, "startDiscovery")
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
@@ -92,7 +105,10 @@ object NearbyManager {
                 }
             },
             discoveryOptions
-        ).addOnSuccessListener { Log.d(TAG, "Discovery successfully started") }
+        ).addOnSuccessListener {
+            Log.d(TAG, "Discovery successfully started")
+            isDiscovering = true
+        }
             .addOnFailureListener { e -> Log.e(TAG, "Discovery failed", e) }
     }
 
@@ -112,6 +128,8 @@ object NearbyManager {
         connectionsClient.stopAllEndpoints()
         connectionsClient.stopAdvertising()
         connectionsClient.stopDiscovery()
+        isAdvertising = false
+        isDiscovering = false
         connectedEndpoints.clear()
     }
 
@@ -153,6 +171,12 @@ object NearbyManager {
             connectedEndpoints.remove(endpointId)
             Log.d(TAG, "onDisconnected $endpointId (total ${'$'}{connectedEndpoints.size})")
             onConnectionChanged?.invoke(connectedEndpoints.size)
+
+            // If no peers left, resume discovery automatically for seamless reconnection
+            if (connectedEndpoints.isEmpty()) {
+                isDiscovering = false
+                startDiscovery()
+            }
         }
     }
 

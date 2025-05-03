@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 import com.example.planetxt.ui.theme.PlanetxtTheme
 
 class MainActivity : ComponentActivity() {
@@ -107,10 +108,14 @@ fun AdminScreen() {
     var message by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
 
-    // Start advertising once
     LaunchedEffect(Unit) {
-        NearbyManager.startAdvertising(context, "Admin") { _, _ -> }
         NearbyManager.onConnectionChanged = { connectionCount = it }
+
+        // Keep advertising forever, retry every 60s in case the system stops it
+        while (true) {
+            NearbyManager.startAdvertising(context, "Admin") { _, _ -> }
+            delay(60_000)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -145,7 +150,12 @@ fun UserScreen() {
             messages.add(msg)
         }
         NearbyManager.onConnectionChanged = { connectionCount = it }
-        NearbyManager.startDiscovery {}
+
+        // Continuous discovery loop (retry every 30s)
+        while (true) {
+            NearbyManager.startDiscovery {}
+            delay(30_000)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
