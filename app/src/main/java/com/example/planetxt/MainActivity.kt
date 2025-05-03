@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -27,6 +28,10 @@ import kotlinx.coroutines.withContext
 import java.net.URL
 import com.example.planetxt.CryptoUtil
 import com.example.planetxt.ui.theme.PlanetxtTheme
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.MultiFormatWriter
+import com.google.zxing.common.BitMatrix
+import androidx.compose.foundation.Image
 
 private const val ADMIN_TAG = "AdminScreen"
 
@@ -364,6 +369,16 @@ fun UserScreen() {
 
             Spacer(Modifier.height(16.dp))
 
+            // QR code for the booking
+            val qrContent = "$bookingRef,$lastName"
+            val qrBitmap = remember(qrContent) {
+                generateQrBitmap(qrContent)
+            }
+            if (qrBitmap != null) {
+                Image(bitmap = qrBitmap.asImageBitmap(), contentDescription = "QR Code", modifier = Modifier.size(200.dp).align(Alignment.CenterHorizontally))
+                Spacer(Modifier.height(16.dp))
+            }
+
             Text("Announcements:")
             LazyColumn(modifier = Modifier.height(120.dp)) {
                 items(announcements) { txt -> Text(txt) }
@@ -376,4 +391,18 @@ fun UserScreen() {
             }
         }
     }
+}
+
+fun generateQrBitmap(content: String): android.graphics.Bitmap? {
+    val writer = MultiFormatWriter()
+    val matrix = writer.encode(content, BarcodeFormat.QR_CODE, 200, 200)
+    val width = matrix.width
+    val height = matrix.height
+    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.RGB_565)
+    for (x in 0 until width) {
+        for (y in 0 until height) {
+            bitmap.setPixel(x, y, if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+        }
+    }
+    return bitmap
 }
