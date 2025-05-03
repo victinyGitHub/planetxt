@@ -114,11 +114,14 @@ object NearbyManager {
 
     /** Broadcasts a string message to all currently connected endpoints. */
     @JvmStatic
-    fun broadcast(message: String) {
+    fun broadcast(msg: String, encrypt: Boolean = false, lastName: String = "", ref: String = "") {
         if (connectedEndpoints.isEmpty()) return
-        Log.d(TAG, "broadcast to ${'$'}{connectedEndpoints.size} endpoints: $message")
-        val payload = Payload.fromBytes(message.toByteArray())
-        connectionsClient.sendPayload(connectedEndpoints.toList(), payload)
+        val finalMsg = if (encrypt && lastName.isNotBlank() && ref.isNotBlank())
+            CryptoUtil.encryptMessage(msg, lastName, ref) else msg
+        val payload = Payload.fromBytes(finalMsg.toByteArray())
+        for (ep in connectedEndpoints) {
+            connectionsClient.sendPayload(ep, payload)
+        }
     }
 
     /** Stop all ongoing Nearby activities and disconnect from peers. */
@@ -153,7 +156,7 @@ object NearbyManager {
         override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
             // Immediately accept the connection and register our payload callback
             connectionsClient.acceptConnection(endpointId, payloadCallback)
-        }
+        } 
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {

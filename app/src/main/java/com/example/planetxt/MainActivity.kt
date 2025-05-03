@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import com.example.planetxt.CryptoUtil
 import com.example.planetxt.ui.theme.PlanetxtTheme
 
 class MainActivity : ComponentActivity() {
@@ -106,6 +107,8 @@ fun RoleSelectionScreen(onRoleChosen: (Screen) -> Unit) {
 fun AdminScreen() {
     val context = LocalContext.current
     var message by remember { mutableStateOf("") }
+    var lastName by remember { mutableStateOf("") }
+    var bookingRef by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -121,16 +124,31 @@ fun AdminScreen() {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(text = "Admin Mode – Connected peers: $connectionCount")
         Spacer(modifier = Modifier.height(16.dp))
-        TextField(
+        OutlinedTextField(
             value = message,
             onValueChange = { message = it },
             label = { Text("Broadcast message") },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = lastName,
+            onValueChange = { lastName = it },
+            label = { Text("Passenger last name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = bookingRef,
+            onValueChange = { bookingRef = it },
+            label = { Text("Booking ref") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
             if (message.isNotBlank()) {
-                NearbyManager.broadcast(message)
+                val encrypt = lastName.isNotBlank() && bookingRef.isNotBlank()
+                NearbyManager.broadcast(message, encrypt, lastName, bookingRef)
                 message = ""
             }
         }, modifier = Modifier.align(Alignment.End)) {
@@ -143,11 +161,16 @@ fun AdminScreen() {
 fun UserScreen() {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<String>() }
+    var lastName by remember { mutableStateOf("") }
+    var bookingRef by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         NearbyManager.onMessageReceived = { msg ->
-            messages.add(msg)
+            // Attempt decryption if creds entered
+            val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
+                CryptoUtil.decryptMessage(msg, lastName, bookingRef) else null
+            if (plain != null) messages.add(plain)
         }
         NearbyManager.onConnectionChanged = { connectionCount = it }
 
@@ -161,6 +184,21 @@ fun UserScreen() {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text(text = "User Mode – Connected to $connectionCount peer(s)")
         Spacer(modifier = Modifier.height(16.dp))
+        OutlinedTextField(
+            value = lastName,
+            onValueChange = { lastName = it },
+            label = { Text("Last name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = bookingRef,
+            onValueChange = { bookingRef = it },
+            label = { Text("Booking ref") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(16.dp))
+
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(messages) { txt ->
                 Text(text = txt)
