@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
         Manifest.permission.BLUETOOTH_CONNECT,
         Manifest.permission.BLUETOOTH_ADVERTISE,
         Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
         Manifest.permission.ACCESS_WIFI_STATE,
         Manifest.permission.CHANGE_WIFI_STATE
     )
@@ -80,6 +81,13 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         NearbyManager.stopAll()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // When app goes to background, stop heavy radio use
+        NearbyManager.stopAdvertising()
+        NearbyManager.stopDiscovery()
     }
 }
 
@@ -153,7 +161,7 @@ fun AdminScreen() {
 
         // Keep advertising forever, retry every 60s in case the system stops it
         while (true) {
-            NearbyManager.startAdvertising(context, "Admin") { _, _ -> }
+            NearbyManager.safeStartAdvertising(context, "Admin") { _, _ -> }
             delay(60_000)
         }
     }
@@ -186,22 +194,34 @@ fun AdminScreen() {
         OutlinedTextField(
             value = message,
             onValueChange = { message = it },
-            label = { Text("Broadcast message") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("Broadcast message", color = androidx.compose.ui.graphics.Color.Black) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+            )
         )
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = lastName,
             onValueChange = { lastName = it },
-            label = { Text("Passenger last name") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("Passenger last name", color = androidx.compose.ui.graphics.Color.Black) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+            )
         )
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = bookingRef,
             onValueChange = { bookingRef = it },
-            label = { Text("Booking ref") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("Booking ref", color = androidx.compose.ui.graphics.Color.Black) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+            )
         )
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
@@ -215,7 +235,7 @@ fun AdminScreen() {
                 }
             }
         }, modifier = Modifier.align(Alignment.End)) {
-            Text("Send Manual Message")
+            Text("Send Manual Message", color = androidx.compose.ui.graphics.Color.White)
         }
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = {
@@ -249,23 +269,27 @@ fun AdminScreen() {
                 }
             }
         }) {
-            Text("Fetch CSV & Broadcast Now")
+            Text("Fetch CSV & Broadcast Now", color = androidx.compose.ui.graphics.Color.White)
         }
         if (csvStatus.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
-            Text(csvStatus, style = MaterialTheme.typography.bodySmall)
+            Text(csvStatus, style = MaterialTheme.typography.bodySmall, color = androidx.compose.ui.graphics.Color.Black)
         }
         Spacer(modifier = Modifier.height(16.dp))
         Text("Server Announcements:")
         LazyColumn(modifier = Modifier.height(120.dp)) {
-            items(fetchedAnnouncements) { txt -> Text(txt) }
+            items(fetchedAnnouncements) { txt -> Text(txt, color = androidx.compose.ui.graphics.Color.Black) }
         }
         Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = announcement,
             onValueChange = { announcement = it },
-            label = { Text("Announcement to all") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("Announcement to all", color = androidx.compose.ui.graphics.Color.Black) },
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+            )
         )
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = {
@@ -275,7 +299,7 @@ fun AdminScreen() {
                 announcement = ""
             }
         }, modifier = Modifier.align(Alignment.End)) {
-            Text("Broadcast Announcement")
+            Text("Broadcast Announcement", color = androidx.compose.ui.graphics.Color.White)
         }
     }
 }
@@ -301,14 +325,21 @@ fun UserScreen() {
                     val id = idPart.toIntOrNull()
                     val body = content.substring(secondSep + 1)
                     if (id != null && receivedAnnIds.add(id)) {
-                        announcements.add(body)
+                        val parts = body.split(",").map { it.trim('"', ' ') }
+                        announcements.add(parts.joinToString("\t"))
                     }
                 }
                 return@listener
             }
 
             if (metadata.isAnnouncement) {
-                announcements.add(content)
+                // Announcement: parse fields and join with tabs
+                if (content.startsWith("\"") && content.contains(",")) {
+                    val parts = content.split(",").map { it.trim('"', ' ') }
+                    announcements.add(parts.joinToString("\t"))
+                } else {
+                    announcements.add(content)
+                }
                 return@listener
             }
 
@@ -322,7 +353,7 @@ fun UserScreen() {
 
         // Continuous discovery loop (retry every 30s)
         while (true) {
-            NearbyManager.startDiscovery {}
+            NearbyManager.safeStartDiscovery {}
             delay(30_000)
         }
     }
@@ -332,15 +363,23 @@ fun UserScreen() {
             OutlinedTextField(
                 value = lastName,
                 onValueChange = { lastName = it },
-                label = { Text("Last name") },
-                modifier = Modifier.fillMaxWidth()
+                label = { Text("Last name", color = androidx.compose.ui.graphics.Color.Black) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                    unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+                )
             )
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = bookingRef,
                 onValueChange = { bookingRef = it },
-                label = { Text("Booking ref") },
-                modifier = Modifier.fillMaxWidth()
+                label = { Text("Booking ref", color = androidx.compose.ui.graphics.Color.Black) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = androidx.compose.ui.graphics.Color.Black,
+                    unfocusedBorderColor = androidx.compose.ui.graphics.Color.Black
+                )
             )
             Spacer(Modifier.height(16.dp))
             Button(onClick = {
@@ -348,31 +387,31 @@ fun UserScreen() {
                     loggedIn = true
                 }
             }, modifier = Modifier.align(Alignment.End)) {
-                Text("Log In")
+                Text("Log In", color = androidx.compose.ui.graphics.Color.White)
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Logged in as $lastName / $bookingRef", modifier = Modifier.weight(1f))
+                Text("Logged in as $lastName / $bookingRef", modifier = Modifier.weight(1f), color = androidx.compose.ui.graphics.Color.Black)
                 Button(onClick = {
                     loggedIn = false
                     messages.clear()
                     announcements.clear()
                     lastName = ""
                     bookingRef = ""
-                }) { Text("Log Out") }
+                }) { Text("Log Out", color = androidx.compose.ui.graphics.Color.White) }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            Text("Announcements:")
+            Text("Announcements:", color = androidx.compose.ui.graphics.Color.Black)
             LazyColumn(modifier = Modifier.height(120.dp)) {
-                items(announcements) { txt -> Text(txt) }
+                items(announcements) { txt -> Text(txt, color = androidx.compose.ui.graphics.Color.Black) }
             }
 
             Spacer(Modifier.height(16.dp))
-            Text("Your messages:")
+            Text("Your messages:", color = androidx.compose.ui.graphics.Color.Black)
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(messages) { txt -> Text(text = txt) }
+                items(messages) { txt -> Text(text = txt, color = androidx.compose.ui.graphics.Color.Black) }
             }
         }
     }

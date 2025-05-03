@@ -93,16 +93,22 @@ object NearbyManager {
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
 
-        getClient(context).startAdvertising(
-            userName,
-            SERVICE_ID,
-            connectionLifecycleCallback(onAdvertisingResult),
-            advertisingOptions
-        ).addOnSuccessListener {
-            Log.i(TAG, "Advertising started: userName=$userName")
-            isAdvertising = true
-        }.addOnFailureListener { e ->
-            Log.e(TAG, "Advertising failed", e)
+        try {
+            isAdvertising = true  // Mark as advertising BEFORE the async call
+            getClient(context).startAdvertising(
+                userName,
+                SERVICE_ID,
+                connectionLifecycleCallback(onAdvertisingResult),
+                advertisingOptions
+            ).addOnSuccessListener {
+                Log.i(TAG, "Advertising started: userName=$userName")
+            }.addOnFailureListener { e ->
+                isAdvertising = false  // Reset flag on failure
+                Log.e(TAG, "Advertising failed", e)
+            }
+        } catch (e: Exception) {
+            isAdvertising = false  // Reset flag on exception
+            Log.e(TAG, "Error starting advertising", e)
         }
     }
 
@@ -117,43 +123,97 @@ object NearbyManager {
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
 
-        connectionsClient.startDiscovery(
-            SERVICE_ID,
-            object : EndpointDiscoveryCallback() {
-                override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-                    Log.i(TAG, "Endpoint found: id=$endpointId, name=${info.endpointName}")
-                    connectionsClient.requestConnection(
-                        "receiver",
-                        endpointId,
-                        connectionLifecycleCallback { success, _ ->
-                            if (success) onEndpointConnected(endpointId)
-                        }
-                    )
-                }
+        try {
+            isDiscovering = true  // Mark as discovering BEFORE the async call
+            connectionsClient.startDiscovery(
+                SERVICE_ID,
+                object : EndpointDiscoveryCallback() {
+                    override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+                        Log.i(TAG, "Endpoint found: id=$endpointId, name=${info.endpointName}")
+                        connectionsClient.requestConnection(
+                            "User",
+                            endpointId,
+                            connectionLifecycleCallback { success, _ ->
+                                if (success) {
+                                    onEndpointConnected(endpointId)
+                                }
+                            }
+                        )
+                    }
 
-                override fun onEndpointLost(endpointId: String) {
-                    Log.d(TAG, "Endpoint lost: $endpointId")
-                }
-            },
-            discoveryOptions
-        ).addOnSuccessListener {
-            Log.i(TAG, "Discovery started")
-            isDiscovering = true
-        }.addOnFailureListener { e ->
-            Log.e(TAG, "Discovery failed", e)
+                    override fun onEndpointLost(endpointId: String) {
+                        Log.d(TAG, "Endpoint lost: $endpointId")
+                    }
+                },
+                discoveryOptions
+            ).addOnSuccessListener {
+                Log.i(TAG, "Discovery started")
+            }.addOnFailureListener { e ->
+                isDiscovering = false  // Reset flag on failure
+                Log.e(TAG, "Discovery failed", e)
+            }
+        } catch (e: Exception) {
+            isDiscovering = false  // Reset flag on exception
+            Log.e(TAG, "Error starting discovery", e)
         }
     }
 
     /** Stop all ongoing Nearby activities and disconnect from peers. */
     fun stopAll() {
-        Log.i(TAG, "Stopping all Nearby activities")
-        connectionsClient.stopAllEndpoints()
-        connectionsClient.stopAdvertising()
-        connectionsClient.stopDiscovery()
-        isAdvertising = false
-        isDiscovering = false
-        connectedEndpoints.clear()
-        seenPacketIds.clear()
+        try {
+            connectionsClient.stopAllEndpoints()
+            stopAdvertising()
+            stopDiscovery()
+            connectedEndpoints.clear()
+            onConnectionChanged?.invoke(0)
+            Log.i(TAG, "All Nearby connections stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping all connections", e)
+        }
+    }
+
+    /** Stops advertising if it is currently active. */
+    fun stopAdvertising() {
+        if (isAdvertising) {
+            try {
+                connectionsClient.stopAdvertising()
+                isAdvertising = false
+                Log.i(TAG, "Stopped advertising")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping advertising", e)
+            }
+        }
+    }
+
+    /** Stops discovery if it is currently active. */
+    fun stopDiscovery() {
+        if (isDiscovering) {
+            try {
+                connectionsClient.stopDiscovery()
+                isDiscovering = false
+                Log.i(TAG, "Stopped discovery")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping discovery", e)
+            }
+        }
+    }
+
+    /** Convenience wrapper – starts advertising only when not already advertising. */
+    fun safeStartAdvertising(
+        context: Context,
+        userName: String,
+        onAdvertisingResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        if (!isAdvertising) {
+            startAdvertising(context, userName, onAdvertisingResult)
+        }
+    }
+
+    /** Convenience wrapper – starts discovery only when not already discovering. */
+    fun safeStartDiscovery(onEndpointConnected: (String) -> Unit = {}) {
+        if (!isDiscovering) {
+            startDiscovery(onEndpointConnected)
+        }
     }
 
     private fun getClient(context: Context): ConnectionsClient {
@@ -187,12 +247,9 @@ object NearbyManager {
             connectedEndpoints.remove(endpointId)
             Log.i(TAG, "Endpoint disconnected: $endpointId, total=${connectedEndpoints.size}")
             onConnectionChanged?.invoke(connectedEndpoints.size)
-
-            if (connectedEndpoints.isEmpty()) {
-                isDiscovering = false
-                Log.d(TAG, "All peers gone, restarting discovery")
-                startDiscovery()
-            }
+            
+            // Remove automatic restart to avoid race conditions
+            // Let the periodic discovery in MainActivity handle reconnection
         }
     }
 
