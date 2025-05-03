@@ -120,10 +120,19 @@ object NearbyManager {
 
     /** Broadcasts a string message to all currently connected endpoints. */
     @JvmStatic
-    fun broadcast(msg: String, encrypt: Boolean = false, lastName: String = "", ref: String = "") {
+    fun broadcast(
+        msg: String,
+        encrypt: Boolean = false,
+        lastName: String = "",
+        ref: String = "",
+        announcement: Boolean = false
+    ) {
         if (connectedEndpoints.isEmpty()) return
-        val finalMsg = if (encrypt && lastName.isNotBlank() && ref.isNotBlank())
-            CryptoUtil.encryptMessage(msg, lastName, ref) else msg
+        val finalMsg = when {
+            announcement -> "ANN:" + msg
+            encrypt && lastName.isNotBlank() && ref.isNotBlank() -> CryptoUtil.encryptMessage(msg, lastName, ref)
+            else -> msg
+        }
         val payload = Payload.fromBytes(finalMsg.toByteArray())
         for (ep in connectedEndpoints) {
             connectionsClient.sendPayload(ep, payload)

@@ -117,6 +117,7 @@ fun AdminScreen() {
     var bookingRef by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
     var csvStatus by remember { mutableStateOf("") }
+    var announcement by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
     val csvLauncher = rememberLauncherForActivityResult(
@@ -201,6 +202,21 @@ fun AdminScreen() {
             Text(csvStatus, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(modifier = Modifier.height(16.dp))
+        OutlinedTextField(
+            value = announcement,
+            onValueChange = { announcement = it },
+            label = { Text("Announcement to all") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(onClick = {
+            if (announcement.isNotBlank()) {
+                NearbyManager.broadcast(announcement, announcement = true)
+                announcement = ""
+            }
+        }, modifier = Modifier.align(Alignment.End)) {
+            Text("Broadcast Announcement")
+        }
     }
 }
 
@@ -208,16 +224,20 @@ fun AdminScreen() {
 fun UserScreen() {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<String>() }
+    val announcements = remember { mutableStateListOf<String>() }
     var lastName by remember { mutableStateOf("") }
     var bookingRef by remember { mutableStateOf("") }
     var connectionCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         NearbyManager.onMessageReceived = { msg ->
-            // Attempt decryption if creds entered
-            val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
-                CryptoUtil.decryptMessage(msg, lastName, bookingRef) else null
-            if (plain != null) messages.add(plain)
+            if (msg.startsWith("ANN:")) {
+                announcements.add(msg.removePrefix("ANN:"))
+            } else {
+                val plain = if (lastName.isNotBlank() && bookingRef.isNotBlank())
+                    CryptoUtil.decryptMessage(msg, lastName, bookingRef) else null
+                if (plain != null) messages.add(plain)
+            }
         }
         NearbyManager.onConnectionChanged = { connectionCount = it }
 
@@ -246,6 +266,13 @@ fun UserScreen() {
         )
         Spacer(Modifier.height(16.dp))
 
+        Text("Announcements:")
+        LazyColumn(modifier = Modifier.height(120.dp)) {
+            items(announcements) { txt -> Text(txt) }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Your messages:")
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(messages) { txt ->
                 Text(text = txt)
